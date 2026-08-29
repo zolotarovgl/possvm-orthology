@@ -788,11 +788,23 @@ def find_close_monophyletic_clusters(clu, phy, ref_label="cluster_ref", ref_NA_l
 			
 			# if there is only one node, root is the same node (otherwise defaults to tree root!)
 			if len(nodes_i) > 1:
-				parent_i = phy.get_common_ancestor(nodes_i).get_ancestors()[0]
+				anc_i = phy.get_common_ancestor(nodes_i)
 			elif len(nodes_i) == 1:
-				parent_i = phy.get_leaves_by_name(nodes_i[0])[0].get_ancestors()[0]
-			
+				anc_i = phy.get_leaves_by_name(nodes_i[0])[0]
+
+			# A cluster whose MRCA is already the tree root has no parent to extend from:
+			# get_ancestors() returns [] and the original line raised
+			#     IndexError: list index out of range
+			# There is nothing above such a cluster to inherit a label from, so skip it and
+			# leave it unlabelled. Rare with midpoint rooting, common with -skiproot on an
+			# already-rooted (e.g. GeneRax-reconciled) tree, which is how this surfaced:
+			# 28 of ~168 families died here.
+			if anc_i.is_root():
+				continue
+			parent_i = anc_i.get_ancestors()[0]
+
 			# check if descendants from parent group have references
+			extended_i = False
 			while True:
 				
 				# find leaves descending from the parent node
@@ -815,13 +827,25 @@ def find_close_monophyletic_clusters(clu, phy, ref_label="cluster_ref", ref_NA_l
 					clusters_in_descendants_list = np.unique(clusters_in_descendants)
 					annots_in_descendants_list = np.unique(annots_in_descendants)
 					num_extended = num_extended + 1
+					extended_i = True
 					
 					break
 				
 				# if not, visit upper node, and go back to checking out its descendants
 				else:
+					# Reaching the root without a labelled sister means there is nothing to
+					# transfer. Stop here -- get_ancestors() on the root would raise, and
+					# falling through would reuse the PREVIOUS cluster's annots_in_descendants
+					# and mislabel this one.
+					if parent_i.is_root():
+						break
 					parent_i = parent_i.get_ancestors()[0]
 				
+			# nothing found on the way up: leave this cluster unlabelled rather than
+			# assigning it the previous cluster's labels.
+			if not extended_i:
+				continue
+
 			# where to assign new labels?
 			needs_new_label_ix = np.where( np.isin(element=clu["node"].values, test_elements=nodes_i) )[0]
 			
