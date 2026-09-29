@@ -171,6 +171,12 @@ def parse_phylo(phy_fn, phy_id, do_root, do_allpairs, clusters_function_string, 
 	
 	# load input
 	phy = ete3.PhyloTree("%s" % (phy_fn))
+	# Mark which nodes carry a measured branch support: internal, non-root nodes of the
+	# input tree. Leaves, the input root, and any node created later (polytomy
+	# resolution, rerooting) only hold ete3's default, which find_support_cluster
+	# must not report as data.
+	for n in phy.traverse():
+		n.add_feature("support_measured", not (n.is_leaf() or n.is_root()))
 	logging.info("%s num nodes = %i" % (phy_id,len(phy)))
 	logging.info("%s clustering function is %s" % (phy_id,clusters_function_string))
 	clusters_function = eval(clusters_function_string)
@@ -749,7 +755,15 @@ def find_support_cluster(clu, phy, cluster_label="cluster"):
 		# nodes in cluster
 		nodes_in_cluster = clu[clu[cluster_label] == c]["node"].values
 		# find support in oldest node in cluster
-		cluster_support_dict[c] = phy.get_common_ancestor(nodes_in_cluster.tolist()).support
+		mrca = phy.get_common_ancestor(nodes_in_cluster.tolist())
+		# A leaf (single-gene cluster), the root, or a node added by polytomy resolution
+		# carries no branch support: ete3 returns a default (1.0, or 0.0 for resolved
+		# polytomies) that is indistinguishable from a real, very poor bootstrap.
+		# Report it as missing instead.
+		if mrca.is_leaf() or mrca.is_root() or not getattr(mrca, "support_measured", False):
+			cluster_support_dict[c] = np.nan
+		else:
+			cluster_support_dict[c] = mrca.support
 	
 	cluster_supports = [ cluster_support_dict[c] for c in clu[cluster_label].values ]
 	
@@ -984,6 +998,7 @@ if __name__ == '__main__':
 	# save clusters
 	clu_print = clu[["node","cluster_name","support","node_ref","node_ref_support"]]
 	clu_print.columns = ["gene","orthogroup","orthogroup_support","reference_ortholog","reference_support"]
+	clu_print = clu_print.assign(orthogroup_support=clu_print["orthogroup_support"].astype(object).where(clu_print["orthogroup_support"].notna(), "NA"))
 	clu_print.to_csv("%s/%s.ortholog_groups.csv" % (out_fn,phy_id), sep="\t", index=None, mode="w")
 	
 	# save gene pair information (orthologs and all genes)
