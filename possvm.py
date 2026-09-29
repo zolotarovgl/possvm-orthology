@@ -268,6 +268,15 @@ def parse_phylo(phy_fn, phy_id, do_root, do_allpairs, clusters_function_string, 
 	else:
 		evs, eva, phy, phy_lis = parse_events(phy=phy, outgroup=outgroup, do_allpairs=do_allpairs, min_support_node=min_support_node)
 	clu = clusters_function(evs=evs, node_list=phy_lis)
+	# Number orthogroups by size (largest = OG0), ties broken by where the group first
+	# appears in the (ladderized) tree, and list genes in tree order. The clustering
+	# functions return a set of clusters, whose iteration order -- and so the OG0,
+	# OG1, ... numbering -- varied between runs.
+	pos = { g:i for i,g in enumerate(phy_lis) }
+	clu["_pos"] = clu["node"].map(pos).fillna(len(pos)).astype(int)
+	key = clu.groupby("cluster")["_pos"].agg(["size","min"]).sort_values(["size","min"], ascending=[False,True])
+	clu["cluster"] = clu["cluster"].map({ c:i for i,c in enumerate(key.index) })
+	clu = clu.sort_values(["cluster","_pos","node"]).drop(columns="_pos").reset_index(drop=True)
 	
 	# output from event parsing
 	return evs, eva, phy, phy_lis, clu
@@ -275,6 +284,17 @@ def parse_phylo(phy_fn, phy_id, do_root, do_allpairs, clusters_function_string, 
 
 # parse phylogenies with ETE to obtain a network-like table defining 
 # orthologous relationships, using the species overlap algorithm
+# ete3 builds each event's in_seqs/out_seqs by iterating over sets of TreeNode
+# objects, which hash by memory address: the gene order changes from run to run
+# even with PYTHONHASHSEED fixed. That order becomes the edge insertion order of the
+# orthology graph, and the clustering (LPA in particular) depends on it -- the same
+# tree gave 38-48 orthogroups across runs. Sort the genes so the graph is identical.
+def canonicalise_events(evev):
+	for ev in evev:
+		ev.in_seqs  = sorted(ev.in_seqs)
+		ev.out_seqs = sorted(ev.out_seqs)
+	return evev
+
 def parse_events(phy, outgroup, do_allpairs, min_support_node=0):
 	
 	# list of genes in phylogeny
@@ -282,6 +302,7 @@ def parse_events(phy, outgroup, do_allpairs, min_support_node=0):
 	
 	# find evolutionary events (duplications and speciations)
 	evev = phy.get_descendant_evol_events(sos_thr=sos)
+	evev = canonicalise_events(evev)
 	
 	# # speciation events
 	# evs    = np.empty((len(evev)*len(evev), 5), dtype="object")
@@ -363,6 +384,7 @@ def parse_events_sps_reconciliation(phy, phs, outgroup, do_allpairs):
 	
 	# find evolutionary events (duplications and speciations)
 	recon_tree, evev = phy.reconcile(phs)
+	evev = canonicalise_events(evev)
 	
 	# speciation events
 	evs    = np.empty((len(evev)*len(evev), 5), dtype="object")
